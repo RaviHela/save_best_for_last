@@ -1,0 +1,246 @@
+---
+title: "Save best for the Last?"
+author: "Ravi Hela"
+date: "2 December 2018"
+output:
+  word_document: default
+  pdf_document: default
+  html_document: default
+---
+
+##Motivation
+It is frequently observed that there is a surge of admissions during monthend day in JG courses. There is a race at month end to come at the top of the stack by showing most admissions. Other infuencer is pressure from Sales team at Head Office to bring admission. There is a concern that such factors possibly lead to compromises on quality of student. In this context we define quality of student as his disposition to pay his full fees. In our data set this is captured by feature AR% which we will refer to as Average Realisation. This AR% is a preprocessed variable inthiis dataset which is the ratio of collection over the booking value.
+
+## Research Question:
+### Do monthend admissions tend to have lower average realisation
+
+
+```{r, echo=FALSE}
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(DataExplorer))
+suppressPackageStartupMessages(library(infer))
+suppressPackageStartupMessages(library(gridExtra))
+suppressPackageStartupMessages(library(ggplot2))
+```
+
+```{r, read_data, echo=FALSE}
+options(readr.num_columns = 0)
+ar_student <- read_csv("C:/Users/Rabi/Downloads/Base File - CSV.csv")
+```
+
+
+
+#### Introduction to the Dataset
+
+Lets get introduced to the dataset
+```{r, echo=FALSE}
+glimpse(ar_student)
+DataExplorer::plot_intro(ar_student)
+DataExplorer::plot_missing(ar_student)
+```
+
+The data has `r nrow(ar_student)` rows and `r ncol(ar_student)` columns. The dataset has admission date ranging from April 2015 to October 2018. We remove heavily missing variable. First 4 var are clearly factor var. Converting them to factor. We are only interested in JG courses hence we remove the NJG courses form the Dataset. Variables like Adm Dt, Course, AR(%), Status and Expected completion date have wrongly coded data type. We explore, confirm and fix these variables. We drop Mobile number as it is not relevant for this study.
+
+```{r}
+rm_var <- as.character((DataExplorer::profile_missing(ar_student) %>% filter(group %in% c("Remove", "Bad")) %>% select(feature))[, 1] %>% sapply(as.character))
+ar_student <- ar_student[ , -(which(names(ar_student) %in% rm_var))]
+
+ar_student[, c(1:4)] <- lapply(ar_student[, c(1:4)], factor)
+ar_student <- ar_student %>% filter(`Type of Course` == "JG")
+ar_student$`Type of Course`<- NULL
+ar_student$Mobile <- NULL
+
+head(ar_student$`Adm Dt`)
+ar_student$`Adm Dt` <- lubridate::dmy(ar_student$`Adm Dt`)
+head(ar_student$Course)
+tail(ar_student$Course)
+length(unique(ar_student$Course))
+ar_student$Course <- as.factor(ar_student$Course)
+unique(ar_student$Status)
+ar_student$Status <- as.factor(ar_student$Status)
+table(ar_student$Status)
+```
+
+```{r, echo=FALSE}
+#Treating AR%
+#head(ar_student$`AR(%)`)
+ar_student$`AR(%)`<- as.numeric(str_replace_all(ar_student$`AR(%)`, "%", ""))/100
+```
+
+#### Exploratory Data Analysis
+
+Lets have a look at the dataset once again
+```{r, echo = FALSE}
+glimpse(ar_student)
+plot_bar(ar_student)
+plot_histogram(ar_student)
+```
+
+There also seems to be some extreme values of variabale Sold at, Recv amount, Due and AR(%). lets look their distribution using boxplots.
+
+```{r, echo = FALSE}
+p1 <- ar_student %>% ggplot(aes(y = `Sold At`)) + geom_boxplot() 
+p2 <- ar_student %>% ggplot(aes(y = `Recv Amount`)) + geom_boxplot()
+p3 <- ar_student %>% ggplot(aes(y = Due)) + geom_boxplot()
+p4 <-ar_student %>% ggplot(aes(y = `AR(%)`)) + geom_boxplot()
+gridExtra::grid.arrange(p1,p2,p3,p4, nrow = 1)
+```
+
+
+By bussiness knowledge we know the highest SP of a product shoud be less than a lakh. so remove such observation. AR(%) cannot be more than 100%. so we remove the outiers in AR(%). Lets clean up these above variables of their exceptional values. 
+
+```{r, echo = FALSE}
+ar_student <- ar_student[which(ar_student$`Sold At` < 100000), ]
+ar_student <- ar_student[which(ar_student$`AR(%)` <= 1), ]
+ar_student <- ar_student %>% filter( !Status %in% c("DREQUEST", "TREQUEST"))
+```
+
+lets explore histograms once more for distribution after clean up
+```{r, echo = FALSE}
+plot_histogram(ar_student)
+```
+
+1.  We see from histograms that most admissions happen at Jun July and Aug. 
+2.  We also see that Admissions peaks up during last days of the month.
+
+Lets explore how our numeric variables are distributed across other categorical variable. We start with Status
+
+```{r, echo = FALSE}
+plot_boxplot(ar_student, "Status")
+```
+
+
+1.  The median average realisation of dropouts are less than active student
+3.  Students dropping out  has higer dues.
+4.  Bulk of the admissiom hapens in June-July-August
+5.  Received amount is highest for certified student and so reflected in median of Average realisation
+
+Lets explore across other categorical variable
+```{r, echo = FALSE}
+plot_boxplot(ar_student, "Zone")
+plot_boxplot(ar_student, "Day")
+plot_boxplot(ar_student, "Month")
+plot_boxplot(ar_student, "Year")
+```
+
+1.  South and East have visibly lower averagae realisation than North and West.
+2.  Median of day of admission is above 22 indicates most Admission happens in end of 3rd to 4th week.
+3.  Median of Average realisation is lowest during last five days of the month.
+
+Lets explore the distribution of Average Realisation
+
+```{r, echo=FALSE}
+p1 <- ar_student %>% ggplot(aes(x = `AR(%)`)) + geom_histogram()
+p2 <- ar_student %>% ggplot(aes(x = `AR(%)`)) + geom_density()
+p3 <- ar_student %>% ggplot(aes(y = `AR(%)`)) + geom_boxplot()
+grid.arrange(p1,p2,p3, nrow = 1)
+```
+
+Looks like AR for most of the students is above 75%. We have see in the previous plot that Avg Realisation of East and South is very low caompared to North and West. Lets explore AR across Zone and facetted by Year to see if this observation is consisten YoY. 
+
+```{r, echo = FALSE}
+ar_student %>% ggplot(aes(y = `AR(%)`, x = Zone)) + geom_boxplot(aes(fill = Zone))  + stat_summary(fun.y = mean, geom = "errorbar", aes(ymax = ..y.., ymin = ..y..), width = .75, linetype = "dashed")  +  facet_wrap(Year~., scales = "free")
+```
+
+The trend of low recoevery is consistnet over last 3 years.
+
+Lets see interaction of Average realisation across Zone and Student status.
+
+```{r, echo=FALSE}
+ar_student %>% ggplot(aes(y = `AR(%)`, x = Zone)) + geom_boxplot(aes(fill = Zone)) + stat_summary(fun.y = mean, geom = "errorbar", aes(ymax = ..y.., ymin = ..y..), width = .75, linetype = "dashed")  +  facet_wrap(Status~., scales = "free")
+```
+
+We observe South and East having Low median Avg realisation Compared to North aand West. Lets see how Average Realisation is distributed across days of the month.
+
+Across Day
+```{r, echo=FALSE}
+#p1 <- ar_student %>% ggplot(aes(x = `AR(%)`)) + geom_histogram() + facet_wrap(Day~.)
+#p2 <- ar_student %>% ggplot(aes(x = `AR(%)`)) + geom_density()  + facet_wrap(Day~.)
+ar_student %>%  filter(Status %in% c("ACTIVE", "DROPOUT", "AUTODROPOUT")) %>% ggplot(aes(y = `AR(%)`, x = as.factor(Day))) + geom_boxplot() + facet_wrap(Status~., scales = "free")
+#grid.arrange(p1,p2,p3, nrow = 1)
+```
+
+We observe that the median value of Avg Realisation for Students admitted during end of days are lower in all three groups. Lets see what propotion of students get admitted at each day of the motnh. We want to see how it is different in month end. We first find out the month end dates. Then proceed to plot days Vs. number of admission. We have tagged monthend adissions as "Yes" and rest as "No".
+
+```{r, echo=FALSE}
+ar_student$monthend <- NA
+ar_student$monthend[which(lubridate::days_in_month(ar_student$`Adm Dt`) == lubridate::day(ar_student$`Adm Dt`))] <- "Yes"
+ar_student$monthend[-which(lubridate::days_in_month(ar_student$`Adm Dt`) == lubridate::day(ar_student$`Adm Dt`))] <- "No"
+
+ar_student_hyp <- ar_student %>%  filter(Status %in% c("ACTIVE", "DROPOUT", "AUTODROPOUT"))
+
+
+
+p1 <- ar_student_hyp %>% ggplot(aes(Day, fill = as.factor(monthend))) + geom_bar()
+p2 <- ar_student_hyp %>% ggplot(aes(Day, fill = as.factor(monthend))) + geom_bar(aes(y = (..count..)/sum(..count..)))
+
+grid.arrange(p1,p2,   nrow=2)
+```
+
+Plotting difference of Mean and Median across two groups and printing their summary statistics.
+
+```{r, echo = FALSE}
+
+p3 <- ar_student_hyp %>% ggplot(aes(x =as.factor(Day), y = `AR(%)`, colour = monthend)) + geom_boxplot() + stat_summary(fun.y = mean, geom = "errorbar", aes(ymax = ..y.., ymin = ..y..), width = .75, linetype = "dashed")
+
+p4 <-ar_student_hyp %>% ggplot(aes(x =as.factor(monthend), y = `AR(%)`, colour = monthend)) + geom_boxplot() + stat_summary(fun.y = mean, geom = "errorbar", aes(ymax = ..y.., ymin = ..y..), width = .75, linetype = "dashed")
+
+grid.arrange(p3,p4,   nrow=1)
+
+ar_student_hyp %>% group_by(monthend) %>% summarise(no = length(monthend), mean_ar = mean(`AR(%)`), median_ar = median(`AR(%)`)) %>% ungroup() %>% mutate(prop = no/sum(no))
+```
+
+We see the propotion of admission during month end is `r round(mean(ar_student$monthend == "Yes") * 100)` %. This is `r round(mean(ar_student$monthend == "Yes") * 100)/((1/30)*100)` times more admssion than a normal day.
+
+
+
+#### Formulate hypothesies
+
+Lets formulate our Hypothesis about Average realisation among two groups of individual. A group who gets admitted in monthend and the group who are admitted in other days of the month. We test on both on their difference of mean and median. From the table and distribution lpots above we see that there is a difference of both Mean and Median in two groups. Is the difference statistically significant. We state the formal hypothesis as below. 
+
+H0 <- There is no significance difference between mean and median average realisation of monthend admitted student represented as group Y and rest of the group represented as N
+i.e Nbar - Ybar = 0
+
+Ha <- Nbar - Ybar > 0
+
+```{r, calculate obs diff, echo=FALSE}
+obs_diff_mean <- (ar_student_hyp %>% select(monthend, `AR(%)`) %>% group_by(monthend) %>% summarise(mean_obs = mean(`AR(%)`)) %>% ungroup() %>% spread(monthend, mean_obs) %>% mutate(diff = No -Yes) %>% select(diff)) %>% unlist
+
+obs_diff_med <- (ar_student_hyp %>% select(monthend, `AR(%)`) %>% group_by(monthend) %>% summarise(med_obs = median(`AR(%)`)) %>% ungroup() %>% spread(monthend, med_obs) %>% mutate(diff = No -Yes) %>% select(diff)) %>% unlist
+```
+
+#### Compute test statistic
+The observed differences of mean and median value of the two group are tabulate below:
+
+```{r, echo=FALSE}
+ar_student_hyp %>% group_by(monthend) %>% summarise(no = length(monthend), mean_ar = mean(`AR(%)`), median_ar = median(`AR(%)`)) %>% select(mean_ar, median_ar) %>%  mutate(id= row_number()) %>% group_by(id) %>% gather(key = "metric",value = "difference",  -id) %>% group_by(metric) %>% summarise(obs_diff = -diff(difference))
+```
+
+#### Simulate NULL Distribution of mean and median.
+We generate 1000 samples of the our data and shuffle the average realisation randomly to create a NULL distribution. This will generate 1000 random mean and median differences each. We plot the distribution and mark the observed actual difference. The observed difference lies very extreme end of the distribution in the plot below. 
+
+```{r, inference, echo=FALSE}
+p1 <- suppressWarnings(ar_student_hyp %>% select(monthend, `AR(%)`) %>% specify(`AR(%)` ~ monthend) %>% hypothesize(null = "independence") %>% generate(reps = 1000, type = "permute") %>% calculate(stat = "diff in means", order = c("No", "Yes")) %>% visualise(obs_stat = obs_diff_mean, direction = "greater") + ggtitle("Sim. NULL distribution of mean difference"))
+
+p_val_dif_mean <- ar_student_hyp %>% select(monthend, `AR(%)`) %>% specify(`AR(%)` ~ monthend) %>% hypothesize(null = "independence") %>% generate(reps = 1000, type = "permute") %>% calculate(stat = "diff in means", order = c("No", "Yes")) %>% get_p_value(obs_stat = obs_diff_mean, direction = "greater")
+round(p_val_dif_mean, 10)
+
+
+p2 <- suppressWarnings(ar_student_hyp %>% select(monthend, `AR(%)`) %>% specify(`AR(%)` ~ monthend) %>% hypothesize(null = "independence") %>% generate(reps = 1000, type = "permute") %>% calculate(stat = "diff in medians", order = c("No", "Yes")) %>% visualise(obs_stat = obs_diff_med, direction = "greater") + ggtitle("Sim. NULL distribution of median diff"))
+
+p_val_dif_med <- ar_student_hyp %>% select(monthend, `AR(%)`) %>% specify(`AR(%)` ~ monthend) %>% hypothesize(null = "independence") %>% generate(reps = 1000, type = "permute") %>% calculate(stat = "diff in medians", order = c("No", "Yes")) %>% get_p_value(obs_stat = obs_diff_med, direction = "greater")
+p_val_dif_med 
+
+grid.arrange(p1, p2, nrow = 1)
+```
+
+#### Test Conclusion
+The pvalue for Mean `r p_val_dif_mean` and pvalue of Median `r p_val_dif_med` is very extreme even if we define a strictest of confidence level of 99% as evident from the plot.
+
+This gives a strong evidence that the differences is not by chance but there is some systematic influnce resulting in low realisation from monthend admissions. 
+
+Management should further investigate what could be the reason of such differences. 
+
+
+
+
